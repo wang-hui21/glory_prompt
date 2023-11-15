@@ -17,10 +17,11 @@ class CustomizedBertModel(nn.Module):
         self.myEmbeddings = MyBERTEmbedding(config)  # 使用自定义的嵌入层，初始化嵌入层，此处传入自己定义的各项参数
         self.encoder = BertEncoder(config)                     #只修改嵌入层，编码层不做改动
 
-    def forward(self, input_ids,token_type_ids, attention_mask,myembedding):
+    def forward(self, input_ids, attention_mask, Uembedding, Cembedding):
         # print(myembedding)
 
-        embedding_output = self.myEmbeddings(input_ids=input_ids, token_type_ids=token_type_ids,Myembedding=myembedding)    #调用自定的嵌入层，此处传入的参数，由前向传播函数接受
+        embedding_output = self.myEmbeddings(input_ids=input_ids, Uembedding=Uembedding,
+                            Cembedding=Cembedding)    #调用自定的嵌入层，此处传入的参数，由前向传播函数接受
         encoder_output = self.encoder(embedding_output)
         # embedding_output: 这是嵌入层的输出，通常是BERT模型输入的一部分，是必需的。
         #
@@ -57,9 +58,9 @@ class MyBERTEmbedding(nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, input_ids, token_type_ids,Myembedding):
+    def forward(self, input_ids, Uembedding,Cembedding):
         words_embeddings = self.word_embeddings(input_ids)
-        words_embeddings[0][2]=Myembedding           #此处修改需要改变的embedding层，在此处修改embedding层
+        # words_embeddings[0][2]=Myembedding           #此处修改需要改变的embedding层，在此处修改embedding层
         position_embeddings = self.position_embeddings(torch.arange(input_ids.size(1), device=input_ids.device))
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
         embeddings = words_embeddings + position_embeddings + token_type_embeddings
@@ -74,11 +75,12 @@ class CustomBertForMaskedLM(BertPreTrainedModel):
         self.bert = CustomizedBertModel(config)
         self.cls = BertOnlyMLMHead(config)
 
-    def forward(self, input_ids, attention_mask=None, token_type_ids=None, labels=None, myembedding=None):
+    def forward(self, input_ids, attention_mask=None,  Uembedding=None,
+                            Cembedding=None):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
-                            token_type_ids=token_type_ids,
-                            myembedding=myembedding,
+                            Uembedding=Uembedding,
+                            Cembedding=Cembedding
                             )
 
         sequence_output = outputs[0]

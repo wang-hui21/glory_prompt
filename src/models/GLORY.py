@@ -9,10 +9,11 @@ from models.component.entity_encoder import EntityEncoder, GlobalEntityEncoder
 from models.component.nce_loss import NCELoss
 from models.component.news_encoder import *
 from models.component.user_encoder import *
-
+from transformers import BertTokenizer, BertConfig, AutoTokenizer
+from new.myBertForMaskedLM import CustomBertForMaskedLM
 
 class GLORY(nn.Module):
-    def __init__(self, cfg, glove_emb=None, entity_emb=None):
+    def __init__(self, cfg, glove_emb=None, entity_emb=None, answer_ids=None):
         super().__init__()
 
         self.cfg = cfg
@@ -21,8 +22,21 @@ class GLORY(nn.Module):
         self.news_dim =  cfg.model.head_num * cfg.model.head_dim
         self.entity_dim = cfg.model.entity_emb_dim
 
+        config = BertConfig.from_pretrained(cfg.token.bertmodel)
+        self.BERT = CustomBertForMaskedLM(config)
+        self.BERT.resize_token_embeddings(cfg.token.vocab_size)
+
+        for param in self.BERT.parameters():
+            param.requires_grad = True
+
+        self.answer_ids = answer_ids
+        self.mask_token_id = 103
+        self.loss_func = nn.CrossEntropyLoss()
         # -------------------------- Model --------------------------
         # News Encoder
+
+
+
         self.local_news_encoder = NewsEncoder(cfg, glove_emb)
 
         # GCN
@@ -53,11 +67,11 @@ class GLORY(nn.Module):
         self.candidate_encoder = CandidateEncoder(cfg)
 
         # click prediction
-        self.click_predictor = DotProduct()
-        self.loss_fn = NCELoss()
+        # self.click_predictor = DotProduct()
+        # self.loss_fn = NCELoss()
 
 
-    def forward(self, subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, label=None):
+    def forward(self, subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_attn, target, label=None):
         # -------------------------------------- clicked ----------------------------------
         mask = mapping_idx != -1
         mapping_idx[mapping_idx == -1] = 0
@@ -97,10 +111,21 @@ class GLORY(nn.Module):
 
         cand_final_emb = self.candidate_encoder(cand_title_emb, cand_origin_entity_emb, cand_neighbor_entity_emb)
         # ----------------------------------------- Score ------------------------------------
-        score = self.click_predictor(cand_final_emb, user_emb)
-        loss = self.loss_fn(score, label)
 
-        return loss, score
+        outputs = self.BERT(input_ids=batch_enc,
+                            attention_mask=batch_attn,
+                            Uembedding=user_emb,
+                            Cembedding=cand_final_emb)
+        out_logits = outputs
+
+        mask_position = batch_enc.eq(self.mask_token_id)
+        mask_logits = out_logits[mask_position, :].view(out_logits.size(0), -1, out_logits.size(-1))[:, -1, :]
+
+        answer_logits = mask_logits[:, self.answer_ids]
+
+        loss = self.loss_func(answer_logits, target)
+
+        return loss, answer_logits.softmax(dim=1)
 
     def validation_process(self, subgraph, mappings, clicked_entity, candidate_emb, candidate_entity, entity_mask):
         

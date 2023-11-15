@@ -23,7 +23,7 @@ def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
 
-def load_model(cfg):
+def load_model(cfg, tokenizer):
     # importlib.import_module方法可以动态导入模块, 参数是模块的导入路径。
     # f"models.{cfg.model.model_name}"
     # 构造了模型模块的导入路径, cfg.model.model_name是从配置文件中读取的模型名称。
@@ -44,7 +44,9 @@ def load_model(cfg):
     else:
         word_dict = pickle.load(open(Path(cfg.dataset.train_dir) / "word_dict.bin", "rb"))
         glove_emb = len(word_dict)
-    model = framework(cfg, glove_emb=glove_emb, entity_emb=entity_emb)
+    answer = ['yes', 'no']
+    answer_ids = tokenizer.encode(answer, add_special_tokens=False)
+    model = framework(cfg, glove_emb=glove_emb, entity_emb=entity_emb, answer_ids=answer_ids)
 
     return model
 

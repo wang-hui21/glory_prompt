@@ -55,3 +55,9 @@ token:
   num_conti2: 3
   vocab_size: 6
   bertmodel: "./bert-base-uncased"
+
+#train
+train:
+  wd: 1e-3
+  lr: 2e-5
+  model_save: true

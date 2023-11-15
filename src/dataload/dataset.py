@@ -16,6 +16,8 @@ class TrainDataset(IterableDataset):
         self.local_rank = local_rank
         self.world_size = cfg.gpu_num
 
+        self.tokenizer = tokenizer
+        self.conti_tokens = conti_tokens
     def trans_to_nindex(self, nids):
         return [self.news_index[i] if i in self.news_index else 0 for i in nids]    #返回点击新闻列表对应的索引
 
@@ -53,14 +55,16 @@ class TrainDataset(IterableDataset):
     
 class TrainGraphDataset(TrainDataset):
     def __init__(self, filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors,tokenizer, conti_tokens):
-        super().__init__(filename, news_index, news_input, local_rank, cfg,tokenizer, conti_tokens)
+        super().__init__(filename, news_index, news_input, local_rank, cfg, tokenizer, conti_tokens)
         self.neighbor_dict = neighbor_dict
         self.news_graph = news_graph.to(local_rank, non_blocking=True)
 
         self.batch_size = cfg.batch_size / cfg.gpu_num
         self.entity_neighbors = entity_neighbors
+        self.tokenizer = tokenizer
+        self.conti_tokens = conti_tokens
 
-    def line_mapper(self, line, sum_num_news, tokenizer, conti_tokens):
+    def line_mapper(self, line, sum_num_news):
 
         line = line.strip().split('\t')
         click_id = line[3].split()[-self.cfg.model.his_size:]       # 取出指定数量的新闻 最新阅读的新闻
@@ -80,7 +84,7 @@ class TrainGraphDataset(TrainDataset):
             click_idx.extend(current_hop_idx)          # 将挑选出来的新闻合并起来
         
         sub_news_graph, mapping_idx = self.build_subgraph(click_idx, top_k, sum_num_news)
-        sentence = self.build_prompt(click_id, sess_pos, sess_neg, tokenizer, conti_tokens)         #返回值中包含模板和标签
+        sentence = self.build_prompt(click_id, sess_pos, sess_neg)         #返回值中包含模板和标签  存储格式是列表包含字典
         padded_maping_idx = F.pad(mapping_idx, (self.cfg.model.his_size-len(mapping_idx), 0), "constant", -1)   # 填充mapping_idx长度
 
         
@@ -109,8 +113,8 @@ class TrainGraphDataset(TrainDataset):
             entity_mask = np.zeros(1)
 
         return sub_news_graph, padded_maping_idx, candidate_input, candidate_entity, entity_mask, label, \
-               sum_num_news+sub_news_graph.num_nodes
-    def build_prompt(self,click_id, pos, neg, tokenizer, conti_tokens):
+               sum_num_news+sub_news_graph.num_nodes, sentence
+    def build_prompt(self,click_id, pos, neg):
         template1 = ''.join(self.conti_tokens[0]) + "<user_sentence>"
         template2 = ''.join(self.conti_tokens[1]) + "<candidate_news>"
         # template1 = ''.join(self.conti_tokens[0]) + " 的类别是 "+"<ucate>"
@@ -127,9 +131,9 @@ class TrainGraphDataset(TrainDataset):
             # his_cate.append(hcate)
         his_sen = '[NSEP] ' + ' [NSEP] '.join(his_news_num)
         # his_cat = '[NSEP] ' + ' [NSEP] '.join(his_cate)
-        his_sen_ids = tokenizer.encode(his_sen, add_special_tokens=False)            # add_special_tokens=False表示在tokenize时不添加特殊token,如[CLS]等。
+        his_sen_ids = self.tokenizer.encode(his_sen, add_special_tokens=False)            # add_special_tokens=False表示在tokenize时不添加特殊token,如[CLS]等。
         # his_cat_ids = self.tokenizer.encode(his_cat, add_special_tokens=False)[:max_his_len]
-        his_sen = tokenizer.decode(his_sen_ids)
+        his_sen = self.tokenizer.decode(his_sen_ids)
         # his_cat = self.tokenizer.decode(his_cat_ids)
         base_sentence = template.replace("<user_sentence>", his_sen)
 
@@ -175,17 +179,18 @@ class TrainGraphDataset(TrainDataset):
 
             candidate_entity_list = []
             entity_mask_list = []
+            sentences= []
             sum_num_news = 0
             with open(self.filename) as f:
                 for line in f:        # 对于每一个用户，调用一次line_mapper函数，产生该用户对应的子图，候选输入，候选实体等
                     # if line.strip().split('\t')[3]:
-                    sub_newsgraph, padded_mapping_idx, candidate_input, candidate_entity, entity_mask, label, sum_num_news = self.line_mapper(line, sum_num_news)
+                    sub_newsgraph, padded_mapping_idx, candidate_input, candidate_entity, entity_mask, label, sum_num_news, sentence = self.line_mapper(line, sum_num_news)
 
                     clicked_graphs.append(sub_newsgraph)
                     candidates.append(torch.from_numpy(candidate_input))
                     mappings.append(padded_mapping_idx)
                     labels.append(label)
-
+                    sentences.append(sentence)
                     candidate_entity_list.append(torch.from_numpy(candidate_entity))
                     entity_mask_list.append(torch.from_numpy(entity_mask))
 
@@ -198,9 +203,10 @@ class TrainGraphDataset(TrainDataset):
                         candidate_entity_list = torch.stack(candidate_entity_list)
                         entity_mask_list = torch.stack(entity_mask_list)
 
+                        sentences = torch.stack(sentences)
                         labels = torch.tensor(labels, dtype=torch.long)
-                        yield batch, mappings, candidates, candidate_entity_list, entity_mask_list, labels
-                        clicked_graphs, mappings ,candidates, labels, candidate_entity_list, entity_mask_list  = [], [], [], [], [], []
+                        yield batch, mappings, candidates, candidate_entity_list, entity_mask_list, sentences, labels
+                        clicked_graphs, mappings ,candidates, labels, candidate_entity_list, entity_mask_list, sentences = [], [], [], [], [], [], []
                         sum_num_news = 0
 
                 if (len(clicked_graphs) > 0):
@@ -208,20 +214,23 @@ class TrainGraphDataset(TrainDataset):
 
                     candidates = torch.stack(candidates)
                     mappings = torch.stack(mappings)
+
+                    sentences = torch.stack(sentences)
                     candidate_entity_list = torch.stack(candidate_entity_list)
                     entity_mask_list = torch.stack(entity_mask_list)
                     labels = torch.tensor(labels, dtype=torch.long)
 
-                    yield batch, mappings, candidates, candidate_entity_list, entity_mask_list, labels
+                    yield batch, mappings, candidates, candidate_entity_list, entity_mask_list, sentences, labels
                     f.seek(0)
 
 
 class ValidGraphDataset(TrainGraphDataset):
     def __init__(self, filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors, news_entity, tokenizer, conti_tokens):
-        super().__init__(filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors)
+        super().__init__(filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors, tokenizer, conti_tokens)
         self.news_graph.x = torch.from_numpy(self.news_input).to(local_rank, non_blocking=True)
         self.news_entity = news_entity
-
+        self.tokenizer = tokenizer
+        self.conti_tokens = conti_tokens
     def line_mapper(self, line):
 
         line = line.strip().split('\t')
@@ -242,7 +251,15 @@ class ValidGraphDataset(TrainGraphDataset):
         labels = np.array([int(i.split('-')[1]) for i in line[4].split()])
         candidate_index = self.trans_to_nindex([i.split('-')[0] for i in line[4].split()])
         candidate_input = self.news_input[candidate_index]
+        pos = []
+        neg = []
+        for i, news in zip(labels, candidate_input):
+            if i == 1:
+                pos.append(news)
+            else:
+                neg.append(news)
 
+        sentence = self.build_prompt(click_id, pos, neg)
         if self.cfg.model.use_entity:
             origin_entity = self.news_entity[candidate_index]
             candidate_neighbor_entity = np.zeros((len(candidate_index)*self.cfg.model.entity_size, self.cfg.model.entity_neighbors), dtype=np.int64)
@@ -265,13 +282,13 @@ class ValidGraphDataset(TrainGraphDataset):
 
         batch = Batch.from_data_list([sub_news_graph])
 
-        return batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, labels
+        return batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, sentence, labels
     
     def __iter__(self):
         for line in open(self.filename):
             if line.strip().split('\t')[3]:
-                batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, labels = self.line_mapper(line)
-            yield batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, labels
+                batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, sentence, labels = self.line_mapper(line)
+            yield batch, mapping_idx, clicked_entity, candidate_input, candidate_entity, entity_mask, sentence, labels
 
 
 class NewsDataset(Dataset):

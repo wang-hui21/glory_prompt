@@ -48,3 +48,10 @@ log_steps: 1000
 
 val_skip_epochs: 2
 val_steps: 1000
+
+# tokenizer
+token:
+  num_conti1: 3
+  num_conti2: 3
+  vocab_size: 6
+  bertmodel: "./bert-base-uncased"

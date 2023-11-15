@@ -84,7 +84,7 @@ class GLORY(nn.Module):
         user_emb = self.user_encoder(clicked_total_emb, mask)
 
         # ----------------------------------------- Candidate------------------------------------
-        cand_title_emb = self.local_news_encoder(candidate_news)                                      # [8, 5, 400]
+        cand_title_emb = self.local_news_encoder(candidate_news)                                      # [8, 5, 400]  按顺序存储候选新闻embedding
         if self.use_entity:
             origin_entity, neighbor_entity = candidate_entity.split([self.cfg.model.entity_size,  self.cfg.model.entity_size * self.cfg.model.entity_neighbors], dim=-1)
 

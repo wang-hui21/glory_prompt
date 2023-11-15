@@ -7,12 +7,33 @@ from torch.utils.data import DataLoader
 from torch_geometric.utils import to_undirected
 from tqdm import tqdm
 import pickle
-
+from transformers import BertTokenizer
 from dataload.dataset import *
+
+def load_tokenizer(cfg):
+    tokenizer = BertTokenizer.from_pretrained(cfg.token.bertmodel)
+    conti_tokens1 = []
+    for i in range(cfg.token.num_conti1):
+        conti_tokens1.append('[P' + str(i + 1) + ']')
+    conti_tokens2 = []
+    for i in range(cfg.token.num_conti2):
+        conti_tokens2.append('[Q' + str(i + 1) + ']')
+
+    new_tokens = ['[NSEP]']
+    tokenizer.add_tokens(new_tokens)
+
+    conti_tokens = conti_tokens1 + conti_tokens2
+    tokenizer.add_tokens(conti_tokens)
+
+    new_vocab_size = len(tokenizer)
+    cfg.token.vocab_size = new_vocab_size
+
+    return tokenizer, conti_tokens1, conti_tokens2
 
 def load_data(cfg, mode='train', model=None, local_rank=0):
     data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
-
+    tokenizer, conti_tokens1, conti_tokens2=load_tokenizer(cfg)
+    conti_tokens = [conti_tokens1, conti_tokens2]
     # ------------- load news.tsv-------------
     news_index = pickle.load(open(Path(data_dir[mode]) / "news_dict.bin", "rb"))
 
@@ -45,7 +66,9 @@ def load_data(cfg, mode='train', model=None, local_rank=0):
                 cfg=cfg,
                 neighbor_dict=news_neighbors_dict,
                 news_graph=news_graph,
-                entity_neighbors=entity_neighbors
+                entity_neighbors=entity_neighbors,
+                tokenizer=tokenizer,
+                conti_tokens=conti_tokens
             )
             dataloader = DataLoader(dataset, batch_size=None)
             
@@ -56,6 +79,8 @@ def load_data(cfg, mode='train', model=None, local_rank=0):
                 news_input=news_input,
                 local_rank=local_rank,
                 cfg=cfg,
+                tokenizer=tokenizer,
+                conti_tokens=conti_tokens
             )
 
             dataloader = DataLoader(dataset,
@@ -106,7 +131,9 @@ def load_data(cfg, mode='train', model=None, local_rank=0):
                     neighbor_dict=news_neighbors_dict,
                     news_graph=news_graph,
                     news_entity=news_input[:,-8:-3],
-                    entity_neighbors=entity_neighbors
+                    entity_neighbors=entity_neighbors,
+                    tokenizer=tokenizer,
+                    conti_tokens=conti_tokens
                 )
 
             dataloader = DataLoader(dataset, batch_size=None)
@@ -119,6 +146,8 @@ def load_data(cfg, mode='train', model=None, local_rank=0):
                     news_emb=news_emb,
                     local_rank=local_rank,
                     cfg=cfg,
+                    tokenizer=tokenizer,
+                    conti_tokens=conti_tokens
                 )
             else:
                 dataset = ValidDataset(
@@ -127,6 +156,8 @@ def load_data(cfg, mode='train', model=None, local_rank=0):
                     news_emb=news_emb,
                     local_rank=local_rank,
                     cfg=cfg,
+                    tokenizer=tokenizer,
+                    conti_tokens=conti_tokens
                 )
 
             dataloader = DataLoader(dataset,

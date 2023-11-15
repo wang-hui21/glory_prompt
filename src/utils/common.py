@@ -24,6 +24,11 @@ def seed_everything(seed):
     np.random.seed(seed)
 
 def load_model(cfg):
+    # importlib.import_module方法可以动态导入模块, 参数是模块的导入路径。
+    # f"models.{cfg.model.model_name}"
+    # 构造了模型模块的导入路径, cfg.model.model_name是从配置文件中读取的模型名称。
+    # getattr方法获取一个模块的属性, 这里获取的就是一个模型类。
+    # 将模型类赋值给framework变量, 后续可以实例化该模型类来使用。
     framework = getattr(importlib.import_module(f"models.{cfg.model.model_name}"), cfg.model.model_name)
 
     if cfg.model.use_entity:

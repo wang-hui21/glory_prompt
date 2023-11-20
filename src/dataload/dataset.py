@@ -70,7 +70,7 @@ class TrainGraphDataset(TrainDataset):
         click_id = line[3].split()[-self.cfg.model.his_size:]       # 取出指定数量的新闻 最新阅读的新闻
         sess_pos = line[4].split()          # 正样本只有一个
         sess_neg = line[5].split()          # 负样本有多个
-
+        imp = line[0].split()               # 序号
         # ------------------ Clicked News ----------------------
         # ------------------ News Subgraph ---------------------
         top_k = len(click_id)
@@ -84,7 +84,7 @@ class TrainGraphDataset(TrainDataset):
             click_idx.extend(current_hop_idx)          # 将挑选出来的新闻合并起来
         
         sub_news_graph, mapping_idx = self.build_subgraph(click_idx, top_k, sum_num_news)
-        sentence = self.build_prompt(click_id, sess_pos, sess_neg)         #返回值中包含模板和标签  存储格式是列表包含字典
+        sentence = self.build_prompt(click_id, sess_pos, sess_neg, imp)         #返回值中包含模板和标签  存储格式是列表包含字典
         padded_maping_idx = F.pad(mapping_idx, (self.cfg.model.his_size-len(mapping_idx), 0), "constant", -1)   # 填充mapping_idx长度
 
         
@@ -114,7 +114,7 @@ class TrainGraphDataset(TrainDataset):
 
         return sub_news_graph, padded_maping_idx, candidate_input, candidate_entity, entity_mask, label, \
                sum_num_news+sub_news_graph.num_nodes, sentence
-    def build_prompt(self,click_id, pos, neg):
+    def build_prompt(self,click_id, pos, neg, imp):
         template1 = ''.join(self.conti_tokens[0]) + "<user_sentence>"
         template2 = ''.join(self.conti_tokens[1]) + "<candidate_news>"
         # template1 = ''.join(self.conti_tokens[0]) + " 的类别是 "+"<ucate>"
@@ -150,7 +150,7 @@ class TrainGraphDataset(TrainDataset):
                 sentence = base_sentence.replace("<candidate_news>", j)
                 # sentence = sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
                 # sentence = base_sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
-                data.append({'sentence': sentence, 'target': 0})
+                data.append({'sentence': sentence, 'target': 0, 'imp': imp})
         return data
     # 这个函数的主要作用是为了构建一个与原始图相关的子图，该子图包含唯一的节点和相应的边信息，以便后续进行进一步的计算和处理。
     def build_subgraph(self, subset, k, sum_num_nodes):
@@ -235,6 +235,7 @@ class ValidGraphDataset(TrainGraphDataset):
 
         line = line.strip().split('\t')
         click_id = line[3].split()[-self.cfg.model.his_size:]
+        imp = line[0].split()
 
         click_idx = self.trans_to_nindex(click_id)
         clicked_entity = self.news_entity[click_idx]  
@@ -259,7 +260,7 @@ class ValidGraphDataset(TrainGraphDataset):
             else:
                 neg.append(news)
 
-        sentence = self.build_prompt(click_id, pos, neg)
+        sentence = self.build_prompt(click_id, pos, neg, imp)
         if self.cfg.model.use_entity:
             origin_entity = self.news_entity[candidate_index]
             candidate_neighbor_entity = np.zeros((len(candidate_index)*self.cfg.model.entity_size, self.cfg.model.entity_neighbors), dtype=np.int64)

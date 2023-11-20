@@ -58,7 +58,7 @@ class MyBERTEmbedding(nn.Module):
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, input_ids, Uembedding,Cembedding):
+    def forward(self, input_ids,token_type_ids, Uembedding,Cembedding):
         words_embeddings = self.word_embeddings(input_ids)
         # words_embeddings[0][2]=Myembedding           #此处修改需要改变的embedding层，在此处修改embedding层
         position_embeddings = self.position_embeddings(torch.arange(input_ids.size(1), device=input_ids.device))
@@ -75,10 +75,11 @@ class CustomBertForMaskedLM(BertPreTrainedModel):
         self.bert = CustomizedBertModel(config)
         self.cls = BertOnlyMLMHead(config)
 
-    def forward(self, input_ids, attention_mask=None,  Uembedding=None,
+    def forward(self, input_ids, attention_mask=None, token_type_ids=None,  Uembedding=None,
                             Cembedding=None):
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
+                            token_type_ids=token_type_ids,
                             Uembedding=Uembedding,
                             Cembedding=Cembedding
                             )

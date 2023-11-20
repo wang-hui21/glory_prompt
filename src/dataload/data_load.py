@@ -160,6 +160,7 @@ def collate_fn(tuple_list, local_rank, tokenizer):
     sentences = [x[5] for x in tuple_list]
     sentence = [x['sentence'] for x in sentences]
     target = [x['target'] for x in sentences]
+    imp = [x['imp'] for x in sentences]
     encode_dict = tokenizer.batch_encode_plus(
         sentence,
         add_special_tokens=True,
@@ -172,9 +173,10 @@ def collate_fn(tuple_list, local_rank, tokenizer):
     )
     batch_enc = encode_dict['input_ids']
     batch_attn = encode_dict['attention_mask']
+    batch_token= encode_dict['token_type_ids']
     target = torch.LongTensor(target)
     if len(tuple_list[0]) == 7:
         labels = [x[6] for x in tuple_list]
-        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target, labels
+        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target, imp, batch_token, labels
     else:
-        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target
+        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target, imp, batch_token

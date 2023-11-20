@@ -16,29 +16,36 @@ from torch.optim.lr_scheduler import LambdaLR
 
 from dataload.data_load import load_data
 from dataload.data_preprocess import prepare_preprocessed_data
-from src.utils.utils import evaluate
+from utils.utils import evaluate
 from utils.metrics import *
 from utils.common import *
 from transformers import BertTokenizer
 from transformers import AdamW
 from torch.nn.parallel import DistributedDataParallel as DDP
+
 ### custom your wandb setting here ###
 # os.environ["WANDB_API_KEY"] = ""
 os.environ["WANDB_MODE"] = "offline"
+
+
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '23342'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+
 def cleanup():
     dist.destroy_process_group()
-def train(model, optimizer,  dataloader, local_rank,world_size,cfg):
+
+
+def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
     model.train()
     torch.set_grad_enabled(True)
 
     mean_loss = torch.zeros(2).to(local_rank)
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
-    for cnt, (subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_attn, batch_labs, batch_imp, batch_token, labels) \
+    for cnt, (subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, labels) \
             in enumerate(tqdm(dataloader,
                               total=int(cfg.num_epochs * (cfg.dataset.pos_count // cfg.batch_size + 1)),
                               desc=f"[{local_rank}] Training"), start=1):
@@ -48,14 +55,16 @@ def train(model, optimizer,  dataloader, local_rank,world_size,cfg):
         labels = labels.to(local_rank, non_blocking=True)
         candidate_entity = candidate_entity.to(local_rank, non_blocking=True)
         entity_mask = entity_mask.to(local_rank, non_blocking=True)
-        batch_enc = batch_enc.to(local_rank, non_blocking=True)
-        batch_attn = batch_attn.to(local_rank, non_blocking=True)
-        batch_labs = batch_labs.to(local_rank, non_blocking=True)
-        batch_token = batch_token.to(local_rank, non_blocking=True)
 
+        # batch_attn = batch_attn.to(local_rank, non_blocking=True)
+        # batch_labs = batch_labs.to(local_rank, non_blocking=True)
+        # batch_token = batch_token.to(local_rank, non_blocking=True)
+        # '[P1][P2][P3][nsep] 0 [nsep] 1 [nsep] 2 [nsep] 3 [nsep] 4 [nsep] 5[SEP][Q1][Q2][Q3]0[SEP]Does the user click the news
+        # sentence = [[d["sentence"] for d in sublist] for sublist in batch_enc]
 
         with amp.autocast():
-            loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_attn, batch_labs, batch_token, labels)
+            loss, scores, batch_labs = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask,
+                                             batch_enc, tokenizer, labels)
 
         optimizer.zero_grad()
         loss.backward()
@@ -92,7 +101,8 @@ def val(model, local_rank, world_size, cfg):
     model.eval()
     tokenizer, conti_tokens1, conti_tokens2 = load_tokenizer(cfg)
     conti_tokens = [conti_tokens1, conti_tokens2]
-    dataloader = load_data(cfg, mode='val', model=model, local_rank=local_rank, tokenizer=tokenizer, conti_tokens=conti_tokens)
+    dataloader = load_data(cfg, mode='val', model=model, local_rank=local_rank, tokenizer=tokenizer,
+                           conti_tokens=conti_tokens)
     val_scores = []
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
@@ -100,25 +110,30 @@ def val(model, local_rank, world_size, cfg):
     labels = []
 
     with torch.no_grad():
-        for cnt, (subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, batch_attn, batch_labs, batch_imp, batch_token, s_labels) \
+        # for cnt, (subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, batch_attn, batch_labs, batch_imp, batch_token, s_labels) \
+        #         in enumerate(tqdm(dataloader,
+        #                           total=int(cfg.dataset.val_len / cfg.gpu_num ),
+        #                           desc=f"[{local_rank}] Validating")):
+        for cnt, (
+        subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, s_labels) \
                 in enumerate(tqdm(dataloader,
-                                  total=int(cfg.dataset.val_len / cfg.gpu_num ),
+                                  total=int(cfg.dataset.val_len / cfg.gpu_num),
                                   desc=f"[{local_rank}] Validating")):
             candidate_emb = torch.FloatTensor(np.array(candidate_input)).to(local_rank, non_blocking=True)
             candidate_entity = candidate_entity.to(local_rank, non_blocking=True)
             entity_mask = entity_mask.to(local_rank, non_blocking=True)
             clicked_entity = clicked_entity.to(local_rank, non_blocking=True)
 
-            imp_ids = imp_ids + batch_imp
             labels = labels + batch_labs.cpu().numpy().tolist()
 
             batch_enc = batch_enc.to(local_rank, non_blocking=True)
             batch_attn = batch_attn.to(local_rank, non_blocking=True)
             batch_labs = batch_labs.to(local_rank, non_blocking=True)
 
-            loss, scores = model.module.validation_process(subgraph, mappings, clicked_entity, candidate_emb, candidate_entity, batch_enc,
-                                 batch_attn, batch_labs, batch_token, entity_mask)
-
+            loss, scores = model.module.validation_process(subgraph, mappings, clicked_entity, candidate_emb,
+                                                           candidate_entity, batch_enc,
+                                                           batch_attn, batch_labs, batch_token, entity_mask)
+            imp_ids = imp_ids + batch_imp
             ranking_scores = scores[:, 1].detach()
             # 测试新闻排序的概率值
             print("scores:{}".format(scores[10]))
@@ -159,7 +174,6 @@ def val(model, local_rank, world_size, cfg):
         return val_scores_list, acc.item(), acc_pos.item(), pos_ratio.item(), val_impids_list, val_labels_list
 
 
-
 def load_tokenizer(cfg):
     tokenizer = BertTokenizer.from_pretrained(cfg.token.bertmodel)
     conti_tokens1 = []
@@ -177,13 +191,18 @@ def load_tokenizer(cfg):
 
     new_vocab_size = len(tokenizer)
     cfg.token.vocab_size = new_vocab_size
-
+    # cfg.token.tokenizer = tokenizer
     return tokenizer, conti_tokens1, conti_tokens2
-def main_worker(local_rank, world_size, cfg):
-    # -----------------------------------------Environment Initial
-    seed_everything(cfg.seed)   #设置随机数种子
-    setup(local_rank, world_size)
 
+
+def main_worker(local_rank, cfg):
+    # -----------------------------------------Environment Initial
+    seed_everything(cfg.seed)  # 设置随机数种子
+    dist.init_process_group(backend='nccl',
+                            init_method='tcp://127.0.0.1:23456',
+                            world_size=cfg.gpu_num,
+                            rank=local_rank)  # 表明其在整个分布式环境中的排名和标识
+    world_size = cfg.gpu_num
     # -----------------------------------------Dataset & Model Load
     num_training_steps = int(cfg.num_epochs * cfg.dataset.pos_count / (cfg.batch_size * cfg.accumulation_steps))
     num_warmup_steps = int(num_training_steps * cfg.warmup_ratio + 1)
@@ -191,8 +210,9 @@ def main_worker(local_rank, world_size, cfg):
     tokenizer, conti_tokens1, conti_tokens2 = load_tokenizer(cfg)
     conti_tokens = [conti_tokens1, conti_tokens2]
 
-    train_dataloader = load_data(cfg, mode='train', local_rank=local_rank, tokenizer=tokenizer, conti_tokens=conti_tokens)   #加载训练数据
-    val_dataloader = load_data(cfg, mode='val',local_rank=local_rank, tokenizer=tokenizer, conti_tokens=conti_tokens)
+    train_dataloader = load_data(cfg, mode='train', local_rank=local_rank, tokenizer=tokenizer,
+                                 conti_tokens=conti_tokens)  # 加载训练数据
+    # val_dataloader = load_data(cfg, mode='val',local_rank=local_rank, tokenizer=tokenizer, conti_tokens=conti_tokens)
     model = load_model(cfg, tokenizer).to(local_rank)
     net = DDP(model, device_ids=[local_rank])
     # optimizer = torch.optim.Adam(model.parameters(), lr=cfg.optimizer.lr)
@@ -208,7 +228,7 @@ def main_worker(local_rank, world_size, cfg):
 
     # lr_lambda = lambda step: 1.0 if step > num_warmup_steps else step / num_warmup_steps
     # scheduler = LambdaLR(optimizer, lr_lambda)
-    
+
     # ------------------------------------------Load Checkpoint & optimizer
 
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
@@ -229,7 +249,7 @@ def main_worker(local_rank, world_size, cfg):
             print('Epoch: ', epoch)
             print('lr:', optimizer.state_dict()['param_groups'][0]['lr'])
         loss, acc_tra, acc_pos_tra, pos_ratio_tra = \
-            train(net, optimizer, train_dataloader, local_rank, world_size, cfg)
+            train(net, optimizer, train_dataloader, local_rank, world_size, tokenizer, cfg)
         # scheduler.step()
 
         end_tra = time.time()
@@ -317,13 +337,14 @@ def main_worker(local_rank, world_size, cfg):
         wandb.finish()
     cleanup()
 
+
 @hydra.main(version_base="1.2", config_path=os.path.join(get_root(), "configs"), config_name="small")
 def main(cfg: DictConfig):
     seed_everything(cfg.seed)
     cfg.gpu_num = torch.cuda.device_count()
     prepare_preprocessed_data(cfg)
-    mp.spawn(main_worker, nprocs=cfg.gpu_num, args=(cfg, cfg.gpu_num))    # 这行代码的目的是使用 PyTorch 的分布式训练功能，以并行方式执行名为 main_worker 的函数。
-                                                              # 每个工作进程都会执行相同的 main_worker 函数，但可以根据配置中的参数来控制不同的行为
+    mp.spawn(main_worker, nprocs=cfg.gpu_num, args=(cfg,))  # 这行代码的目的是使用 PyTorch 的分布式训练功能，以并行方式执行名为 main_worker 的函数。
+    # 每个工作进程都会执行相同的 main_worker 函数，但可以根据配置中的参数来控制不同的行为
 
 
 if __name__ == "__main__":

@@ -40,39 +40,40 @@ def get_sample(all_elements, num_sample):
 
 
 def prepare_distributed_data(cfg, mode="train"):
-    data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir} #不同类型的数据地址和数据类型结合成键值对，生成字典
+    data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir,
+                "test": cfg.dataset.test_dir}  # 不同类型的数据地址和数据类型结合成键值对，生成字典
     # check
-    target_file = os.path.join(data_dir[mode], f"behaviors_np{cfg.npratio}_0.tsv") #自定义实验结果的存储文件
-    if os.path.exists(target_file) and not cfg.reprocess:   #目标文件如果存在，跳出此函数
+    target_file = os.path.join(data_dir[mode], f"behaviors_np{cfg.npratio}_0.tsv")  # 自定义实验结果的存储文件
+    if os.path.exists(target_file) and not cfg.reprocess:  # 目标文件如果存在，跳出此函数
         return 0
     print(f'Target_file is not exist. New behavior file in {target_file}')
 
     behaviors = []
-    behavior_file_path = os.path.join(data_dir[mode], 'behaviors.tsv')  #文件名和地址拼接
+    behavior_file_path = os.path.join(data_dir[mode], 'behaviors.tsv')  # 文件名和地址拼接
 
     if mode == 'train':
         with open(behavior_file_path, 'r', encoding='utf-8') as f:
-            for line in tqdm(f):                                        #按行取出文件内容
-                iid, uid, time, history, imp = line.strip().split('\t') #取出前后空格，按照‘\t’为间隔分割数据
-                impressions = [x.split('-') for x in imp.split(' ')]    #先按照空格分割，再按照‘-’分割，列表推导
+            for line in tqdm(f):  # 按行取出文件内容
+                iid, uid, time, history, imp = line.strip().split('\t')  # 取出前后空格，按照‘\t’为间隔分割数据
+                impressions = [x.split('-') for x in imp.split(' ')]  # 先按照空格分割，再按照‘-’分割，列表推导
                 pos, neg = [], []
-                for news_ID, label in impressions:            #将正样本和负样本分开
+                for news_ID, label in impressions:  # 将正样本和负样本分开
                     if label == '0':
                         neg.append(news_ID)
                     elif label == '1':
                         pos.append(news_ID)
                 if len(pos) == 0 or len(neg) == 0:
                     continue
-                for pos_id in pos:       #把每个用户中的正样本分散放在behaviors中，每组对应一个正样本，多个负样本，此处怎样处理不影响后续操作，都是判断正样本是否会选中，其中有几个正样本不影响结果
-                    neg_candidate = get_sample(neg, cfg.npratio)  #挑选指定数量的负样本
+                for pos_id in pos:  # 把每个用户中的正样本分散放在behaviors中，每组对应一个正样本，多个负样本，此处怎样处理不影响后续操作，都是判断正样本是否会选中，其中有几个正样本不影响结果
+                    neg_candidate = get_sample(neg, cfg.npratio)  # 挑选指定数量的负样本
                     neg_str = ' '.join(neg_candidate)
                     new_line = '\t'.join([iid, uid, time, history, pos_id, neg_str]) + '\n'
-                    behaviors.append(new_line)    #可能会有用户名重复，因为正样本可能不止一个
-        random.shuffle(behaviors)    #使behaviors中的数据产生新的序列
+                    behaviors.append(new_line)  # 可能会有用户名重复，因为正样本可能不止一个
+        random.shuffle(behaviors)  # 使behaviors中的数据产生新的序列
 
-        behaviors_per_file = [[] for _ in range(cfg.gpu_num)]  #创建一个包含多个子列表的列表，每个子列表都用于存储用户交互行为数据的不同部分。提高代码运行效率
+        behaviors_per_file = [[] for _ in range(cfg.gpu_num)]  # 创建一个包含多个子列表的列表，每个子列表都用于存储用户交互行为数据的不同部分。提高代码运行效率
         for i, line in enumerate(behaviors):
-            behaviors_per_file[i % cfg.gpu_num].append(line)   #将数据添加到对应的gpu分组中，方便并行运行
+            behaviors_per_file[i % cfg.gpu_num].append(line)  # 将数据添加到对应的gpu分组中，方便并行运行
 
     elif mode in ['val', 'test']:
         behaviors_per_file = [[] for _ in range(cfg.gpu_num)]
@@ -82,7 +83,7 @@ def prepare_distributed_data(cfg, mode="train"):
                 behaviors_per_file[i % cfg.gpu_num].append(line)
 
     print(f'[{mode}]Writing files...')
-    for i in range(cfg.gpu_num):    #处理好的数据写入新的文件
+    for i in range(cfg.gpu_num):  # 处理好的数据写入新的文件
         processed_file_path = os.path.join(data_dir[mode], f'behaviors_np{cfg.npratio}_{i}.tsv')
         with open(processed_file_path, 'w') as f:
             f.writelines(behaviors_per_file[i])
@@ -106,14 +107,14 @@ def read_raw_news(cfg, file_path, mode='train'):
     """
     import nltk
     nltk.download('punkt')
-    
+
     data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
 
-    if mode in ['val', 'test']:   #测试时打开训练过程中保存的文件
+    if mode in ['val', 'test']:  # 测试时打开训练过程中保存的文件
         news_dict = pickle.load(open(Path(data_dir["train"]) / "news_dict.bin", "rb"))
         entity_dict = pickle.load(open(Path(data_dir["train"]) / "entity_dict.bin", "rb"))
         news = pickle.load(open(Path(data_dir["train"]) / "nltk_news.bin", "rb"))
-    else:     #训练时，初始化各个列表
+    else:  # 训练时，初始化各个列表
         news = {}
         news_dict = {}
         entity_dict = {}
@@ -122,25 +123,25 @@ def read_raw_news(cfg, file_path, mode='train'):
     subcategory_dict = {}
     word_cnt = Counter()  # Counter is a subclass of the dictionary dict.
 
-    num_line = len(open(file_path, encoding='utf-8').readlines())  #统计新闻行数
+    num_line = len(open(file_path, encoding='utf-8').readlines())  # 统计新闻行数
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in tqdm(f, total=num_line, desc=f"[{mode}]Processing raw news"):
             # split one line
             split_line = line.strip('\n').split('\t')
             news_id, category, subcategory, title, abstract, url, t_entity_str, _ = split_line
-            update_dict(target_dict=news_dict, key=news_id)  #将新闻id添加到列表中，值用数字表示
+            update_dict(target_dict=news_dict, key=news_id)  # 将新闻id添加到列表中，值用数字表示
 
             # Entity
             if t_entity_str:
                 entity_ids = [obj["WikidataId"] for obj in json.loads(t_entity_str)]
-                [update_dict(target_dict=entity_dict, key=entity_id) for entity_id in entity_ids] #实体也添加到列表中
+                [update_dict(target_dict=entity_dict, key=entity_id) for entity_id in entity_ids]  # 实体也添加到列表中
             else:
                 entity_ids = t_entity_str
-            
-            tokens = word_tokenize(title.lower(), language=cfg.dataset.dataset_lang) #将标题划分为多个token
+
+            tokens = word_tokenize(title.lower(), language=cfg.dataset.dataset_lang)  # 将标题划分为多个token
 
             update_dict(target_dict=news, key=news_id, value=[tokens, category, subcategory, entity_ids,
-                                                                news_dict[news_id]])            #新闻id和新闻序号对应上
+                                                              news_dict[news_id]])  # 新闻id和新闻序号对应上
 
             if mode == 'train':
                 update_dict(target_dict=category_dict, key=category)
@@ -148,24 +149,25 @@ def read_raw_news(cfg, file_path, mode='train'):
                 word_cnt.update(tokens)
 
         if mode == 'train':
-            word = [k for k, v in word_cnt.items() if v > cfg.model.word_filter_num]  #列表推导，提取出要求数量的键
-            word_dict = {k: v for k, v in zip(word, range(1, len(word) + 1))}     #字典推导
+            word = [k for k, v in word_cnt.items() if v > cfg.model.word_filter_num]  # 列表推导，提取出要求数量的键
+            word_dict = {k: v for k, v in zip(word, range(1, len(word) + 1))}  # 字典推导
             return news, news_dict, category_dict, subcategory_dict, entity_dict, word_dict
         else:  # val, test
             return news, news_dict, None, None, entity_dict, None
 
-#将新闻的各个属性，全部对应存储到列表中
+
+# 将新闻的各个属性，全部对应存储到列表中
 def read_parsed_news(cfg, news, news_dict,
                      category_dict=None, subcategory_dict=None, entity_dict=None,
                      word_dict=None):
     news_num = len(news) + 1
-    news_category, news_subcategory, news_index = [np.zeros((news_num, 1), dtype='int32') for _ in range(3)]  #列表推导
+    news_category, news_subcategory, news_index = [np.zeros((news_num, 1), dtype='int32') for _ in range(3)]  # 列表推导
     news_entity = np.zeros((news_num, 5), dtype='int32')
 
     news_title = np.zeros((news_num, cfg.model.title_size), dtype='int32')
 
     for _news_id in tqdm(news, total=len(news), desc="Processing parsed news"):
-        _title, _category, _subcategory, _entity_ids, _news_index = news[_news_id]   #从字典中提取数据
+        _title, _category, _subcategory, _entity_ids, _news_index = news[_news_id]  # 从字典中提取数据
 
         news_category[_news_index, 0] = category_dict[_category] if _category in category_dict else 0
         news_subcategory[_news_index, 0] = subcategory_dict[_subcategory] if _subcategory in subcategory_dict else 0
@@ -207,8 +209,8 @@ def prepare_preprocess_bin(cfg, mode):
         pickle.dump(nltk_news_dict, open(Path(data_dir[mode]) / "news_dict.bin", "wb"))
         nltk_news_features = read_parsed_news(cfg, nltk_news, nltk_news_dict,
                                               category_dict, subcategory_dict, entity_dict,
-                                              word_dict)                                    #将返回值全都存储到一个变量中
-        news_input = np.concatenate([x for x in nltk_news_features], axis=1)                #将变量中所有属性拼接起来
+                                              word_dict)  # 将返回值全都存储到一个变量中
+        news_input = np.concatenate([x for x in nltk_news_features], axis=1)  # 将变量中所有属性拼接起来
         pickle.dump(news_input, open(Path(data_dir[mode]) / "nltk_token_news.bin", "wb"))
         print("Glove token preprocess finish.")
     else:
@@ -218,66 +220,66 @@ def prepare_preprocess_bin(cfg, mode):
 def prepare_news_graph(cfg, mode='train'):
     data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
 
-    nltk_target_path = Path(data_dir[mode]) / "nltk_news_graph.pt"      #自定义文件名
+    nltk_target_path = Path(data_dir[mode]) / "nltk_news_graph.pt"  # 自定义文件名
 
     reprocess_flag = False
     if nltk_target_path.exists() is False:
         reprocess_flag = True
-        
+
     if (reprocess_flag == False) and (cfg.reprocess == False):
         print(f"[{mode}] All graphs exist !")
         return
-    
+
     # -----------------------------------------News Graph------------------------------------------------
     behavior_path = Path(data_dir['train']) / "behaviors.tsv"
     origin_graph_path = Path(data_dir['train']) / "nltk_news_graph.pt"
 
     news_dict = pickle.load(open(Path(data_dir[mode]) / "news_dict.bin", "rb"))
     nltk_token_news = pickle.load(open(Path(data_dir[mode]) / "nltk_token_news.bin", "rb"))
-    
+
     # ------------------- Build Graph -------------------------------
     if mode == 'train':
-        edge_list, user_set = [], set()  #定义边的列表和用户集合
+        edge_list, user_set = [], set()  # 定义边的列表和用户集合
         num_line = len(open(behavior_path, encoding='utf-8').readlines())
         with open(behavior_path, 'r', encoding='utf-8') as f:
             for line in tqdm(f, total=num_line, desc=f"[{mode}] Processing behaviors news to News Graph"):
                 line = line.strip().split('\t')
 
                 # check duplicate user
-                used_id = line[1]   #取出用户ID
+                used_id = line[1]  # 取出用户ID
                 if used_id in user_set:
                     continue
                 else:
-                    user_set.add(used_id)       #将用户id加入集合
+                    user_set.add(used_id)  # 将用户id加入集合
 
                 # record cnt & read path
                 history = line[3].split()
                 if len(history) > 1:
                     long_edge = [news_dict[news_id] for news_id in history]
-                    edge_list.append(long_edge)     #同一个用户之间的历史新闻开始建边，直接将新闻列表添加到edge_list
+                    edge_list.append(long_edge)  # 同一个用户之间的历史新闻开始建边，直接将新闻列表添加到edge_list
 
         # edge count
         node_feat = nltk_token_news
         target_path = nltk_target_path
-        num_nodes = len(news_dict) + 1          # number of nodes
+        num_nodes = len(news_dict) + 1  # number of nodes
 
         short_edges = []
-        for edge in tqdm(edge_list, total=len(edge_list), desc=f"Processing news edge list"):          #    取出edge_list中的每一个列表
+        for edge in tqdm(edge_list, total=len(edge_list), desc=f"Processing news edge list"):  # 取出edge_list中的每一个列表
             # Trajectory Graph
-            if cfg.model.use_graph_type == 0:      #代码中默认为0
+            if cfg.model.use_graph_type == 0:  # 代码中默认为0
                 for i in range(len(edge) - 1):
-                    short_edges.append((edge[i], edge[i + 1]))      #从小到大连接，箭头方向暂时未知
+                    short_edges.append((edge[i], edge[i + 1]))  # 从小到大连接，箭头方向暂时未知
                     # short_edges.append((edge[i + 1], edge[i]))
             elif cfg.model.use_graph_type == 1:
                 # Co-occurence Graph        共现图？
-                for i in range(len(edge) - 1):     #构建方式类似于完全图，具体用来干什么暂时未知
-                    for j in range(i+1, len(edge)):
+                for i in range(len(edge) - 1):  # 构建方式类似于完全图，具体用来干什么暂时未知
+                    for j in range(i + 1, len(edge)):
                         short_edges.append((edge[i], edge[j]))
                         short_edges.append((edge[j], edge[i]))
             else:
                 assert False, "Wrong"
 
-        edge_weights = Counter(short_edges)  #统计边的权重，用字典形式存储
+        edge_weights = Counter(short_edges)  # 统计边的权重，用字典形式存储
         unique_edges = list(edge_weights.keys())
 
         edge_index = torch.tensor(list(zip(*unique_edges)), dtype=torch.long)
@@ -293,13 +295,13 @@ def prepare_news_graph(cfg, mode='train'):
         #
         # num_nodes = num_nodes：这里将图中的节点数量存储在num_nodes属性中。 num_nodes是一个整数，表示图中节点的总数。
         data = Data(x=torch.from_numpy(node_feat),
-                edge_index=edge_index, edge_attr=edge_attr,
-                num_nodes=num_nodes)
-    
+                    edge_index=edge_index, edge_attr=edge_attr,
+                    num_nodes=num_nodes)
+
         torch.save(data, target_path)
         print(data)
         print(f"[{mode}] Finish News Graph Construction, \nGraph Path: {target_path} \nGraph Info: {data}")
-    
+
     elif mode in ['test', 'val']:
         origin_graph = torch.load(origin_graph_path)
         edge_index = origin_graph.edge_index
@@ -309,13 +311,13 @@ def prepare_news_graph(cfg, mode='train'):
         data = Data(x=torch.from_numpy(node_feat),
                     edge_index=edge_index, edge_attr=edge_attr,
                     num_nodes=len(news_dict) + 1)
-        
+
         torch.save(data, nltk_target_path)
         print(f"[{mode}] Finish nltk News Graph Construction, \nGraph Path: {nltk_target_path}\nGraph Info: {data}")
 
 
 def prepare_neighbor_list(cfg, mode='train', target='news'):
-    #--------------------------------Neighbors List-------------------------------------------
+    # --------------------------------Neighbors List-------------------------------------------
     print(f"[{mode}] Start to process neighbors list")
 
     data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
@@ -327,8 +329,8 @@ def prepare_neighbor_list(cfg, mode='train', target='news'):
     for file_path in [neighbor_dict_path, weights_dict_path]:
         if file_path.exists() is False:
             reprocess_flag = True
-        
-    if (reprocess_flag == False) and (cfg.reprocess == False) and (cfg.reprocess_neighbors == False):  #判断是否需要进行数据处理
+
+    if (reprocess_flag == False) and (cfg.reprocess == False) and (cfg.reprocess_neighbors == False):  # 判断是否需要进行数据处理
         print(f"[{mode}] All {target} Neighbor dict exist !")
         return
 
@@ -351,19 +353,20 @@ def prepare_neighbor_list(cfg, mode='train', target='news'):
 
     neighbor_dict = collections.defaultdict(list)
     neighbor_weights_dict = collections.defaultdict(list)
-    
+
     # for each node (except 0)
-    for i in range(1, len(target_dict)+1):
-        dst_edges = torch.where(edge_index[1] == i)[0]          # i as dst  返回和第I个新闻有边的横坐标
-        neighbor_weights = edge_attr[dst_edges]                 # 取出相应的权重
-        neighbor_nodes = edge_index[0][dst_edges]               # neighbors as src  取出邻居节点
+    for i in range(1, len(target_dict) + 1):
+        dst_edges = torch.where(edge_index[1] == i)[0]  # i as dst  返回和第I个新闻有边的横坐标
+        neighbor_weights = edge_attr[dst_edges]  # 取出相应的权重
+        neighbor_nodes = edge_index[0][dst_edges]  # neighbors as src  取出邻居节点
         sorted_weights, indices = torch.sort(neighbor_weights, descending=True)  # 给权重排序
         neighbor_dict[i] = neighbor_nodes[indices].tolist()
-        neighbor_weights_dict[i] = sorted_weights.tolist()     # 给所有的邻接新闻排序，按照权重大小
-    
+        neighbor_weights_dict[i] = sorted_weights.tolist()  # 给所有的邻接新闻排序，按照权重大小
+
     pickle.dump(neighbor_dict, open(neighbor_dict_path, "wb"))
-    pickle.dump(neighbor_weights_dict, open(weights_dict_path, "wb"))     # 分别存储邻居节点和邻接矩阵
-    print(f"[{mode}] Finish {target} Neighbor dict \nDict Path: {neighbor_dict_path}, \nWeight Dict: {weights_dict_path}")
+    pickle.dump(neighbor_weights_dict, open(weights_dict_path, "wb"))  # 分别存储邻居节点和邻接矩阵
+    print(
+        f"[{mode}] Finish {target} Neighbor dict \nDict Path: {neighbor_dict_path}, \nWeight Dict: {weights_dict_path}")
 
 
 def prepare_entity_graph(cfg, mode='train'):
@@ -419,7 +422,7 @@ def prepare_entity_graph(cfg, mode='train'):
                     edge_index=edge_index,
                     edge_attr=edge_attr,
                     num_nodes=len(entity_dict) + 1)
-            
+
         torch.save(data, target_path)
         print(f"[{mode}] Finish Entity Graph Construction, \n Graph Path: {target_path} \nGraph Info: {data}")
     elif mode in ['val', 'test']:
@@ -430,7 +433,7 @@ def prepare_entity_graph(cfg, mode='train'):
         data = Data(x=torch.arange(len(entity_dict) + 1),
                     edge_index=edge_index, edge_attr=edge_attr,
                     num_nodes=len(entity_dict) + 1)
-        
+
         torch.save(data, target_path)
         print(f"[{mode}] Finish Entity Graph Construction, \n Graph Path: {target_path} \nGraph Info: {data}")
 
@@ -460,7 +463,7 @@ def prepare_preprocessed_data(cfg):
     prepare_neighbor_list(cfg, 'test', 'entity')
 
     # Entity vec process
-    data_dir = {"train":cfg.dataset.train_dir, "val":cfg.dataset.val_dir, "test":cfg.dataset.test_dir}
+    data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
     train_entity_emb_path = Path(data_dir['train']) / "entity_embedding.vec"
     val_entity_emb_path = Path(data_dir['val']) / "entity_embedding.vec"
     test_entity_emb_path = Path(data_dir['test']) / "entity_embedding.vec"

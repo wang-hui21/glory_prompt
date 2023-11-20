@@ -11,16 +11,16 @@ from transformers.models.bert.modeling_bert import BertOnlyMLMHead, BertEncoder
 
 
 class CustomizedBertModel(nn.Module):
-    def __init__(self, config):         #初始化，可以在此处传入各种参数
+    def __init__(self, config, cfg):         #初始化，可以在此处传入各种参数
         super(CustomizedBertModel, self).__init__()
         # self.myembedding=myembedding
-        self.myEmbeddings = MyBERTEmbedding(config)  # 使用自定义的嵌入层，初始化嵌入层，此处传入自己定义的各项参数
+        self.myEmbeddings = MyBERTEmbedding(config, cfg)  # 使用自定义的嵌入层，初始化嵌入层，此处传入自己定义的各项参数
         self.encoder = BertEncoder(config)                     #只修改嵌入层，编码层不做改动
 
-    def forward(self, input_ids, attention_mask, Uembedding, Cembedding):
+    def forward(self, input_ids, attention_mask, token_type_ids,Uembedding, Cembedding):
         # print(myembedding)
 
-        embedding_output = self.myEmbeddings(input_ids=input_ids, Uembedding=Uembedding,
+        embedding_output = self.myEmbeddings(input_ids=input_ids, token_type_ids=token_type_ids,Uembedding=Uembedding,
                             Cembedding=Cembedding)    #调用自定的嵌入层，此处传入的参数，由前向传播函数接受
         encoder_output = self.encoder(embedding_output)
         # embedding_output: 这是嵌入层的输出，通常是BERT模型输入的一部分，是必需的。
@@ -50,11 +50,11 @@ class CustomizedBertModel(nn.Module):
 
 # 自定义嵌入层
 class MyBERTEmbedding(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, cfg):
         super(MyBERTEmbedding, self).__init__()
-        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.word_embeddings = nn.Embedding(cfg.token.vocab_size, config.hidden_size)
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
-        self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
+        self.token_type_embeddings = nn.Embedding(cfg.token.vocab_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
@@ -70,9 +70,9 @@ class MyBERTEmbedding(nn.Module):
 
 class CustomBertForMaskedLM(BertPreTrainedModel):
 
-    def __init__(self, config):
+    def __init__(self, config, cfg):
         super().__init__(config)
-        self.bert = CustomizedBertModel(config)
+        self.bert = CustomizedBertModel(config, cfg)
         self.cls = BertOnlyMLMHead(config)
 
     def forward(self, input_ids, attention_mask=None, token_type_ids=None,  Uembedding=None,
@@ -84,6 +84,6 @@ class CustomBertForMaskedLM(BertPreTrainedModel):
                             Cembedding=Cembedding
                             )
 
-        sequence_output = outputs[0]
+        sequence_output = outputs
         prediction_scores = self.cls(sequence_output)
         return prediction_scores

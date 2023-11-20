@@ -11,8 +11,7 @@ from transformers import BertTokenizer
 from dataload.dataset import *
 
 
-
-def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , conti_tokens=None):
+def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None, conti_tokens=None):
     data_dir = {"train": cfg.dataset.train_dir, "val": cfg.dataset.val_dir, "test": cfg.dataset.test_dir}
 
     # ------------- load news.tsv-------------
@@ -28,7 +27,6 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , cont
             if cfg.model.directed is False:
                 news_graph.edge_index, news_graph.edge_attr = to_undirected(news_graph.edge_index, news_graph.edge_attr)
             print(f"[{mode}] News Graph Info: {news_graph}")
-
 
             news_neighbors_dict = pickle.load(open(Path(data_dir[mode]) / "news_neighbor_dict.bin", "rb"))
 
@@ -51,9 +49,9 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , cont
                 tokenizer=tokenizer,
                 conti_tokens=conti_tokens
             )
-            dataloader = DataLoader(dataset, batch_size=None,
-                                    collate_fn=lambda b: collate_fn(b, local_rank, tokenizer))
-            
+            dataloader = DataLoader(dataset, batch_size=None
+                                    )
+
         else:
             dataset = TrainDataset(
                 filename=target_file,
@@ -80,11 +78,13 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , cont
         with torch.no_grad():
             for news_batch in tqdm(news_dataloader, desc=f"[{local_rank}] Processing validation News Embedding"):
                 if cfg.model.use_graph:
-                    batch_emb = model.module.local_news_encoder(news_batch.long().unsqueeze(0).to(local_rank)).squeeze(0).detach()
+                    batch_emb = model.module.local_news_encoder(news_batch.long().unsqueeze(0).to(local_rank)).squeeze(
+                        0).detach()
                 else:
-                    batch_emb = model.module.local_news_encoder(news_batch.long().unsqueeze(0).to(local_rank)).squeeze(0).detach()
+                    batch_emb = model.module.local_news_encoder(news_batch.long().unsqueeze(0).to(local_rank)).squeeze(
+                        0).detach()
                 stacked_news.append(batch_emb)
-        news_emb = torch.cat(stacked_news, dim=0).cpu().numpy()   
+        news_emb = torch.cat(stacked_news, dim=0).cpu().numpy()
 
         if cfg.model.use_graph:
             news_graph = torch.load(Path(data_dir[mode]) / "nltk_news_graph.pt")
@@ -112,7 +112,7 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , cont
                     cfg=cfg,
                     neighbor_dict=news_neighbors_dict,
                     news_graph=news_graph,
-                    news_entity=news_input[:,-8:-3],
+                    news_entity=news_input[:, -8:-3],
                     entity_neighbors=entity_neighbors,
                     tokenizer=tokenizer,
                     conti_tokens=conti_tokens
@@ -152,12 +152,12 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None , cont
 
 
 def collate_fn(tuple_list, local_rank, tokenizer):
-    clicked_news = [x[0] for x in tuple_list]
-    clicked_mask = [x[1] for x in tuple_list]
-    candidate_news = [x[2] for x in tuple_list]
-    clicked_index = [x[3] for x in tuple_list]
-    candidate_index = [x[4] for x in tuple_list]
-    sentences = [x[5] for x in tuple_list]
+    clicked_news = [x[0] for x in tuple_list][:5]
+    clicked_mask = [x[1] for x in tuple_list][:5]
+    candidate_news = [x[2] for x in tuple_list][:5]
+    clicked_index = [x[3] for x in tuple_list][:5]
+    candidate_index = [x[4] for x in tuple_list][:5]
+    sentences = tuple_list[5]
     sentence = [x['sentence'] for x in sentences]
     target = [x['target'] for x in sentences]
     imp = [x['imp'] for x in sentences]
@@ -173,7 +173,7 @@ def collate_fn(tuple_list, local_rank, tokenizer):
     )
     batch_enc = encode_dict['input_ids']
     batch_attn = encode_dict['attention_mask']
-    batch_token= encode_dict['token_type_ids']
+    batch_token = encode_dict['token_type_ids']
     target = torch.LongTensor(target)
     if len(tuple_list[0]) == 7:
         labels = [x[6] for x in tuple_list]

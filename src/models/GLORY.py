@@ -9,7 +9,7 @@ from models.component.entity_encoder import EntityEncoder, GlobalEntityEncoder
 from models.component.nce_loss import NCELoss
 from models.component.news_encoder import *
 from models.component.user_encoder import *
-from transformers import BertTokenizer, BertConfig, AutoTokenizer
+from transformers import BertTokenizer, BertConfig, AutoTokenizer, BertForMaskedLM
 from new.myBertForMaskedLM import CustomBertForMaskedLM
 
 
@@ -26,7 +26,7 @@ class GLORY(nn.Module):
         config = BertConfig.from_pretrained(cfg.token.bertmodel)
         self.BERT = CustomBertForMaskedLM(config, cfg)
         # self.BERT.resize_token_embeddings(cfg.token.vocab_size)
-
+        self.BERT2 = BertForMaskedLM.from_pretrained(cfg.token.bertmodel)
         for param in self.BERT.parameters():
             param.requires_grad = True
 
@@ -138,6 +138,10 @@ class GLORY(nn.Module):
                                 token_type_ids=batch_token,
                                 Uembedding=user_emb,
                                 Cembedding=cand_final_emb)
+            # outputs = self.BERT2(input_ids=batch_enc,
+            #                     attention_mask=batch_attn,
+            #                     token_type_ids=batch_token
+            #                    )
             out_logits = outputs  # out_logits.shape=([500,30522])
 
             mask_position = batch_enc.eq(self.mask_token_id)  # mask_position.shape=([5,500])

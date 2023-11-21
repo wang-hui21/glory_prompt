@@ -88,7 +88,7 @@ class TrainGraphDataset(TrainDataset):
             click_idx.extend(current_hop_idx)  # 将挑选出来的新闻合并起来
 
         sub_news_graph, mapping_idx = self.build_subgraph(click_idx, top_k, sum_num_news)
-        sentence = self.build_prompt(click_id, sess_pos, sess_neg, imp)  # 返回值中包含模板和标签  存储格式是列表包含字典
+
         padded_maping_idx = F.pad(mapping_idx, (self.cfg.model.his_size - len(mapping_idx), 0), "constant",
                                   -1)  # 填充mapping_idx长度
 
@@ -121,10 +121,6 @@ class TrainGraphDataset(TrainDataset):
             candidate_entity = np.zeros(1)
             entity_mask = np.zeros(1)
 
-        return sub_news_graph, padded_maping_idx, candidate_input, candidate_entity, entity_mask, label, \
-               sum_num_news + sub_news_graph.num_nodes, sentence
-
-    def build_prompt(self, click_id, pos, neg, imp):
         template1 = ''.join(self.conti_tokens[0]) + "<user_sentence>"
         template2 = ''.join(self.conti_tokens[1]) + "<candidate_news>"
         # template1 = ''.join(self.conti_tokens[0]) + " 的类别是 "+"<ucate>"
@@ -149,19 +145,24 @@ class TrainGraphDataset(TrainDataset):
 
         #             base_sentence = base_sentence.replace("<ucate>", his_cat)
         # base_sentence = template.replace("<ucate>", his_cat)
-        for i, news in enumerate(pos):
+        for i, news in enumerate(sess_pos):
 
             sentence = base_sentence.replace("<candidate_news>", str(i))
             # sentence = sentence.replace("<ccate>", cate+" "+subcate)
             # sentence = base_sentence.replace("<ccate>", cate+" "+subcate)
             data.append({'sentence': sentence, 'target': 1, 'imp': imp})
 
-            for j, n in enumerate(neg):
+            for j, n in enumerate(sess_neg):
                 sentence = base_sentence.replace("<candidate_news>", str(j))
                 # sentence = sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
                 # sentence = base_sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
                 data.append({'sentence': sentence, 'target': 0, 'imp': imp})
-        return data
+        return data, sum_num_news + sub_news_graph.num_nodes
+
+
+    # return sub_news_graph, padded_maping_idx, candidate_input, candidate_entity, entity_mask, label, \
+    #         , sentence
+
 
     # 这个函数的主要作用是为了构建一个与原始图相关的子图，该子图包含唯一的节点和相应的边信息，以便后续进行进一步的计算和处理。
     def build_subgraph(self, subset, k, sum_num_nodes):

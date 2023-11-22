@@ -57,9 +57,25 @@ class MyBERTEmbedding(nn.Module):
         self.token_type_embeddings = nn.Embedding(cfg.token.vocab_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.vec_model = nn.Linear(400, 768)
 
     def forward(self, input_ids,token_type_ids, Uembedding,Cembedding):
         words_embeddings = self.word_embeddings(input_ids)
+        n=0
+        for i, sentence in enumerate(words_embeddings):
+            for j in range(len(sentence)-21):
+                if j==0:
+                    n=n+4
+                    vec=self.vec_model(Uembedding[i][49-j])
+                    words_embeddings[i][n] = vec
+                if j==(len(sentence)-20):
+                    n=n+5
+                    vec = self.vec_model(Cembedding[i])
+                    words_embeddings[i][n] = vec
+                else:
+                    n=n+2
+                    vec = self.vec_model(Uembedding[i][49 - j])
+                    words_embeddings[i][n] = vec
         # words_embeddings[0][2]=Myembedding           #此处修改需要改变的embedding层，在此处修改embedding层
         position_embeddings = self.position_embeddings(torch.arange(input_ids.size(1), device=input_ids.device))
         token_type_embeddings = self.token_type_embeddings(token_type_ids)

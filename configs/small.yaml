@@ -15,6 +15,7 @@ num_epochs: 5
 batch_size: 32            # dataloaders'batch_size = batch_size / gpu_num
 accumulation_steps: 1     # final acutal batch_size = batch_size * accumulation_steps
 gpu_num: 1
+local_rank: 1
 
 # load or not
 load_checkpoint: false

@@ -45,16 +45,21 @@ def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
     mean_loss = torch.zeros(2).to(local_rank)
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
-    for cnt, (subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, labels) \
+    for cnt, (subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target, imp) \
             in enumerate(tqdm(dataloader,
                               total=int(cfg.num_epochs * (cfg.dataset.pos_count // cfg.batch_size + 1)),
                               desc=f"[{local_rank}] Training"), start=1):
         subgraph = subgraph.to(local_rank, non_blocking=True)
         mapping_idx = mapping_idx.to(local_rank, non_blocking=True)
         candidate_news = candidate_news.to(local_rank, non_blocking=True)
-        labels = labels.to(local_rank, non_blocking=True)
+        imp = imp.to(local_rank, non_blocking=True)
         candidate_entity = candidate_entity.to(local_rank, non_blocking=True)
         entity_mask = entity_mask.to(local_rank, non_blocking=True)
+
+        batch_enc = batch_enc.to(local_rank, non_blocking=True)
+        batch_token = batch_token.to(local_rank, non_blocking=True)
+        batch_attn = batch_attn.to(local_rank, non_blocking=True)
+        target = target.to(local_rank, non_blocking=True)
 
         # batch_attn = batch_attn.to(local_rank, non_blocking=True)
         # batch_labs = batch_labs.to(local_rank, non_blocking=True)
@@ -63,8 +68,7 @@ def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
         # sentence = [[d["sentence"] for d in sublist] for sublist in batch_enc]
 
         with amp.autocast():
-            loss, scores, batch_labs = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask,
-                                             batch_enc, tokenizer, labels)
+            loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target, imp)
 
         optimizer.zero_grad()
         loss.backward()
@@ -76,12 +80,12 @@ def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
         mean_loss[1] += 1
 
         predict = torch.argmax(scores.detach(), dim=1)
-        num_correct = (predict == batch_labs).sum()
+        num_correct = (predict == target).sum()
         acc_cnt[0] += num_correct
         acc_cnt[1] += predict.size(0)
 
-        positive_idx = torch.where(batch_labs == 1)[0]
-        num_correct_pos = (predict[positive_idx] == batch_labs[positive_idx]).sum()
+        positive_idx = torch.where(target == 1)[0]
+        num_correct_pos = (predict[positive_idx] == target[positive_idx]).sum()
         acc_cnt_pos[0] += num_correct_pos
         acc_cnt_pos[1] += positive_idx.size(0)
 
@@ -203,6 +207,7 @@ def main_worker(local_rank, cfg):
                             world_size=cfg.gpu_num,
                             rank=local_rank)  # 表明其在整个分布式环境中的排名和标识
     world_size = cfg.gpu_num
+    cfg.rank = local_rank
     # -----------------------------------------Dataset & Model Load
     num_training_steps = int(cfg.num_epochs * cfg.dataset.pos_count / (cfg.batch_size * cfg.accumulation_steps))
     num_warmup_steps = int(num_training_steps * cfg.warmup_ratio + 1)

@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from torch_geometric.utils import to_undirected
 from tqdm import tqdm
 import pickle
+from torch.utils.data.distributed import DistributedSampler
 from transformers import BertTokenizer
 from dataload.dataset import *
 
@@ -37,7 +38,7 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None, conti
             else:
                 entity_neighbors = None
 
-            dataset = TrainGraphDataset(
+            dataset = MyDataset(
                 filename=target_file,
                 news_index=news_index,
                 news_input=news_input,
@@ -49,8 +50,16 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None, conti
                 tokenizer=tokenizer,
                 conti_tokens=conti_tokens
             )
-            dataloader = DataLoader(dataset, batch_size=None
-                                    )
+            train_sampler = DistributedSampler(dataset,
+                                               rank=local_rank,
+                                               num_replicas=cfg.gpu_num,
+                                               shuffle=True)
+            train_kwargs = {'batch_size': cfg.batch_size, 'sampler': train_sampler,
+                            'shuffle': False, 'pin_memory': True, 'collate_fn': dataset.collate_fn}
+            nw = 8
+            cuda_kwargs = {'num_workers': nw, 'pin_memory': True}
+            train_kwargs.update(cuda_kwargs)
+            dataloader= DataLoader(dataset, **train_kwargs)
 
         else:
             dataset = TrainDataset(
@@ -149,34 +158,3 @@ def load_data(cfg, mode='train', model=None, local_rank=0, tokenizer=None, conti
                                     # pin_memory=True, # collate_fn already puts data to GPU
                                     collate_fn=lambda b: collate_fn(b, local_rank, tokenizer))
         return dataloader
-
-
-def collate_fn(tuple_list, local_rank, tokenizer):
-    clicked_news = [x[0] for x in tuple_list][:5]
-    clicked_mask = [x[1] for x in tuple_list][:5]
-    candidate_news = [x[2] for x in tuple_list][:5]
-    clicked_index = [x[3] for x in tuple_list][:5]
-    candidate_index = [x[4] for x in tuple_list][:5]
-    sentences = tuple_list[5]
-    sentence = [x['sentence'] for x in sentences]
-    target = [x['target'] for x in sentences]
-    imp = [x['imp'] for x in sentences]
-    encode_dict = tokenizer.batch_encode_plus(
-        sentence,
-        add_special_tokens=True,
-        padding='max_length',
-        max_length=500,
-        truncation=True,
-        pad_to_max_length=True,
-        return_attention_mask=True,
-        return_tensors='pt'
-    )
-    batch_enc = encode_dict['input_ids']
-    batch_attn = encode_dict['attention_mask']
-    batch_token = encode_dict['token_type_ids']
-    target = torch.LongTensor(target)
-    if len(tuple_list[0]) == 7:
-        labels = [x[6] for x in tuple_list]
-        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target, imp, batch_token, labels
-    else:
-        return clicked_news, clicked_mask, candidate_news, clicked_index, candidate_index, batch_enc, batch_attn, target, imp, batch_token

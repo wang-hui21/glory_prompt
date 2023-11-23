@@ -9,7 +9,7 @@ import re
 class MyDataset(Dataset):
     def __init__(self, filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors,
                  tokenizer, conti_tokens):
-        super().__init__(filename, news_index, news_input, local_rank, cfg, tokenizer, conti_tokens)
+
         self.neighbor_dict = neighbor_dict
         self.news_graph = news_graph.to(local_rank, non_blocking=True)
 

@@ -38,14 +38,16 @@ def cleanup():
     dist.destroy_process_group()
 
 
-def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
+def train(model, optimizer, dataloader, local_rank, world_size, cfg):
     model.train()
     torch.set_grad_enabled(True)
 
     mean_loss = torch.zeros(2).to(local_rank)
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
-    for cnt, (subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target, imp) \
+    for cnt, (
+    subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target,
+    imp) \
             in enumerate(tqdm(dataloader,
                               total=int(cfg.num_epochs * (cfg.dataset.pos_count // cfg.batch_size + 1)),
                               desc=f"[{local_rank}] Training"), start=1):
@@ -68,7 +70,8 @@ def train(model, optimizer, dataloader, local_rank, world_size, tokenizer, cfg):
         # sentence = [[d["sentence"] for d in sublist] for sublist in batch_enc]
 
         with amp.autocast():
-            loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target, imp)
+            loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc,
+                                 batch_token, batch_attn, target, imp)
 
         optimizer.zero_grad()
         loss.backward()
@@ -119,7 +122,7 @@ def val(model, local_rank, world_size, cfg):
         #                           total=int(cfg.dataset.val_len / cfg.gpu_num ),
         #                           desc=f"[{local_rank}] Validating")):
         for cnt, (
-        subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, s_labels) \
+                subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, s_labels) \
                 in enumerate(tqdm(dataloader,
                                   total=int(cfg.dataset.val_len / cfg.gpu_num),
                                   desc=f"[{local_rank}] Validating")):
@@ -136,8 +139,8 @@ def val(model, local_rank, world_size, cfg):
 
             loss, scores = model.module.validation_process(subgraph, mappings, clicked_entity, candidate_emb,
                                                            candidate_entity, batch_enc,
-                                                           batch_attn, batch_labs, batch_token, entity_mask)
-            imp_ids = imp_ids + batch_imp
+                                                           batch_attn, batch_labs, entity_mask)
+            imp_ids = imp_ids
             ranking_scores = scores[:, 1].detach()
             # 测试新闻排序的概率值
             print("scores:{}".format(scores[10]))
@@ -207,7 +210,7 @@ def main_worker(local_rank, cfg):
                             world_size=cfg.gpu_num,
                             rank=local_rank)  # 表明其在整个分布式环境中的排名和标识
     world_size = cfg.gpu_num
-    cfg.rank = local_rank
+
     # -----------------------------------------Dataset & Model Load
     num_training_steps = int(cfg.num_epochs * cfg.dataset.pos_count / (cfg.batch_size * cfg.accumulation_steps))
     num_warmup_steps = int(num_training_steps * cfg.warmup_ratio + 1)
@@ -254,7 +257,7 @@ def main_worker(local_rank, cfg):
             print('Epoch: ', epoch)
             print('lr:', optimizer.state_dict()['param_groups'][0]['lr'])
         loss, acc_tra, acc_pos_tra, pos_ratio_tra = \
-            train(net, optimizer, train_dataloader, local_rank, world_size, tokenizer, cfg)
+            train(net, optimizer, train_dataloader, local_rank, world_size, cfg)
         # scheduler.step()
 
         end_tra = time.time()
@@ -346,6 +349,9 @@ def main_worker(local_rank, cfg):
 @hydra.main(version_base="1.2", config_path=os.path.join(get_root(), "configs"), config_name="small")
 def main(cfg: DictConfig):
     seed_everything(cfg.seed)
+    # cfg.model='GLORY'
+    # cfg.dataset='MINDSmall.yaml'
+    # cfg.reprocess=True
     cfg.gpu_num = torch.cuda.device_count()
     prepare_preprocessed_data(cfg)
     mp.spawn(main_worker, nprocs=cfg.gpu_num, args=(cfg,))  # 这行代码的目的是使用 PyTorch 的分布式训练功能，以并行方式执行名为 main_worker 的函数。

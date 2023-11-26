@@ -46,8 +46,9 @@ def train(model, optimizer, dataloader, local_rank, world_size, cfg):
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
     for cnt, (
-    subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn, target,
-    imp) \
+            subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc, batch_token, batch_attn,
+            target,
+            imp) \
             in enumerate(tqdm(dataloader,
                               total=int(cfg.num_epochs * (cfg.dataset.pos_count // cfg.batch_size + 1)),
                               desc=f"[{local_rank}] Training"), start=1):
@@ -69,9 +70,8 @@ def train(model, optimizer, dataloader, local_rank, world_size, cfg):
         # '[P1][P2][P3][nsep] 0 [nsep] 1 [nsep] 2 [nsep] 3 [nsep] 4 [nsep] 5[SEP][Q1][Q2][Q3]0[SEP]Does the user click the news
         # sentence = [[d["sentence"] for d in sublist] for sublist in batch_enc]
 
-        with amp.autocast():
-            loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc,
-                                 batch_token, batch_attn, target, imp)
+        loss, scores = model(subgraph, mapping_idx, candidate_news, candidate_entity, entity_mask, batch_enc,
+                             batch_token, batch_attn, target, imp)
 
         optimizer.zero_grad()
         loss.backward()
@@ -104,81 +104,78 @@ def train(model, optimizer, dataloader, local_rank, world_size, cfg):
     return loss_epoch.item(), acc.item(), acc_pos.item(), pos_ratio.item()
 
 
-def val(model, local_rank, world_size, cfg):
+def eval(model, local_rank, dataloader, world_size, cfg):
     model.eval()
-    tokenizer, conti_tokens1, conti_tokens2 = load_tokenizer(cfg)
-    conti_tokens = [conti_tokens1, conti_tokens2]
-    dataloader = load_data(cfg, mode='val', model=model, local_rank=local_rank, tokenizer=tokenizer,
-                           conti_tokens=conti_tokens)
+    # data_loader = tqdm(data_loader)
     val_scores = []
     acc_cnt = torch.zeros(2).to(local_rank)
     acc_cnt_pos = torch.zeros(2).to(local_rank)
     imp_ids = []
     labels = []
+    for cnt, (
+            subgraph, mapping_idx, clicked_entity, candidate_news, candidate_entity, entity_mask, batch_enc,
+            batch_token, batch_attn, target,
+            imp) \
+            in enumerate(tqdm(dataloader,
+                              total=int(cfg.num_epochs * (cfg.dataset.pos_count // cfg.batch_size + 1)),
+                              desc=f"[{local_rank}] Training"), start=1):
+        imp_ids = imp_ids + imp
+        labels = labels + target.cpu().numpy().tolist()
 
-    with torch.no_grad():
-        # for cnt, (subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, batch_attn, batch_labs, batch_imp, batch_token, s_labels) \
-        #         in enumerate(tqdm(dataloader,
-        #                           total=int(cfg.dataset.val_len / cfg.gpu_num ),
-        #                           desc=f"[{local_rank}] Validating")):
-        for cnt, (
-                subgraph, mappings, clicked_entity, candidate_input, candidate_entity, entity_mask, batch_enc, s_labels) \
-                in enumerate(tqdm(dataloader,
-                                  total=int(cfg.dataset.val_len / cfg.gpu_num),
-                                  desc=f"[{local_rank}] Validating")):
-            candidate_emb = torch.FloatTensor(np.array(candidate_input)).to(local_rank, non_blocking=True)
-            candidate_entity = candidate_entity.to(local_rank, non_blocking=True)
-            entity_mask = entity_mask.to(local_rank, non_blocking=True)
-            clicked_entity = clicked_entity.to(local_rank, non_blocking=True)
+        subgraph = subgraph.to(local_rank, non_blocking=True)
+        mapping_idx = mapping_idx.to(local_rank, non_blocking=True)
+        candidate_news = candidate_news.to(local_rank, non_blocking=True)
+        imp = imp.to(local_rank, non_blocking=True)
+        candidate_entity = candidate_entity.to(local_rank, non_blocking=True)
+        entity_mask = entity_mask.to(local_rank, non_blocking=True)
 
-            labels = labels + batch_labs.cpu().numpy().tolist()
+        batch_enc = batch_enc.to(local_rank, non_blocking=True)
+        batch_token = batch_token.to(local_rank, non_blocking=True)
+        batch_attn = batch_attn.to(local_rank, non_blocking=True)
+        target = target.to(local_rank, non_blocking=True)
 
-            batch_enc = batch_enc.to(local_rank, non_blocking=True)
-            batch_attn = batch_attn.to(local_rank, non_blocking=True)
-            batch_labs = batch_labs.to(local_rank, non_blocking=True)
+        # batch_attn = batch_attn.to(local_rank, non_blocking=True)
+        # batch_labs = batch_labs.to(local_rank, non_blocking=True)
+        # batch_token = batch_token.to(local_rank, non_blocking=True)
+        # '[P1][P2][P3][nsep] 0 [nsep] 1 [nsep] 2 [nsep] 3 [nsep] 4 [nsep] 5[SEP][Q1][Q2][Q3]0[SEP]Does the user click the news
+        # sentence = [[d["sentence"] for d in sublist] for sublist in batch_enc]
 
-            loss, scores = model.module.validation_process(subgraph, mappings, clicked_entity, candidate_emb,
-                                                           candidate_entity, batch_enc,
-                                                           batch_attn, batch_labs, entity_mask)
-            imp_ids = imp_ids
-            ranking_scores = scores[:, 1].detach()
-            # 测试新闻排序的概率值
-            print("scores:{}".format(scores[10]))
-            print("################################")
-            print("ranking_scores:{}".format(ranking_scores[10]))
+        loss, scores = model.module.validation_process(subgraph, mapping_idx, clicked_entity, candidate_news,
+                                                       candidate_entity, entity_mask, batch_enc,
+                                                       batch_token, batch_attn, target, imp)
+        ranking_scores = scores[:, 1].detach()
+        val_scores.append(ranking_scores)
 
-            val_scores.append(ranking_scores)
+        predict = torch.argmax(scores.detach(), dim=1)
+        num_correct = (predict == target).sum()
+        acc_cnt[0] += num_correct
+        acc_cnt[1] += predict.size(0)
 
-            predict = torch.argmax(scores.detach(), dim=1)
-            num_correct = (predict == batch_labs).sum()
-            acc_cnt[0] += num_correct
-            acc_cnt[1] += predict.size(0)
+        positive_idx = torch.where(target == 1)[0]
+        num_correct_pos = (predict[positive_idx] == target[positive_idx]).sum()
+        acc_cnt_pos[0] += num_correct_pos
+        acc_cnt_pos[1] += positive_idx.size(0)
 
-            positive_idx = torch.where(batch_labs == 1)[0]
-            num_correct_pos = (predict[positive_idx] == batch_labs[positive_idx]).sum()
-            acc_cnt_pos[0] += num_correct_pos
-            acc_cnt_pos[1] += positive_idx.size(0)
+    dist.all_reduce(acc_cnt, op=dist.ReduceOp.SUM)
+    dist.all_reduce(acc_cnt_pos, op=dist.ReduceOp.SUM)
 
-        dist.all_reduce(acc_cnt, op=dist.ReduceOp.SUM)
-        dist.all_reduce(acc_cnt_pos, op=dist.ReduceOp.SUM)
+    acc = acc_cnt[0] / acc_cnt[1]
+    acc_pos = acc_cnt_pos[0] / acc_cnt_pos[1]
+    pos_ratio = acc_cnt_pos[1] / acc_cnt[1]
 
-        acc = acc_cnt[0] / acc_cnt[1]
-        acc_pos = acc_cnt_pos[0] / acc_cnt_pos[1]
-        pos_ratio = acc_cnt_pos[1] / acc_cnt[1]
+    val_scores = torch.cat(val_scores, dim=0)
+    val_impids = torch.IntTensor(imp_ids).to(local_rank)
+    val_labels = torch.IntTensor(labels).to(local_rank)
 
-        val_scores = torch.cat(val_scores, dim=0)
-        val_impids = torch.IntTensor(imp_ids).to(local_rank)
-        val_labels = torch.IntTensor(labels).to(local_rank)
+    val_scores_list = [torch.zeros_like(val_scores).to(local_rank) for _ in range(world_size)]
+    val_impids_list = [torch.zeros_like(val_impids).to(local_rank) for _ in range(world_size)]
+    val_labels_list = [torch.zeros_like(val_labels).to(local_rank) for _ in range(world_size)]
 
-        val_scores_list = [torch.zeros_like(val_scores).to(local_rank) for _ in range(world_size)]
-        val_impids_list = [torch.zeros_like(val_impids).to(local_rank) for _ in range(world_size)]
-        val_labels_list = [torch.zeros_like(val_labels).to(local_rank) for _ in range(world_size)]
+    dist.all_gather(val_scores_list, val_scores)
+    dist.all_gather(val_impids_list, val_impids)
+    dist.all_gather(val_labels_list, val_labels)
 
-        dist.all_gather(val_scores_list, val_scores)
-        dist.all_gather(val_impids_list, val_impids)
-        dist.all_gather(val_labels_list, val_labels)
-
-        return val_scores_list, acc.item(), acc_pos.item(), pos_ratio.item(), val_impids_list, val_labels_list
+    return val_scores_list, acc.item(), acc_pos.item(), pos_ratio.item(), val_impids_list, val_labels_list
 
 
 def load_tokenizer(cfg):
@@ -218,8 +215,6 @@ def main_worker(local_rank, cfg):
     tokenizer, conti_tokens1, conti_tokens2 = load_tokenizer(cfg)
     conti_tokens = [conti_tokens1, conti_tokens2]
 
-    train_dataloader = load_data(cfg, mode='train', local_rank=local_rank, tokenizer=tokenizer,
-                                 conti_tokens=conti_tokens)  # 加载训练数据
     # val_dataloader = load_data(cfg, mode='val',local_rank=local_rank, tokenizer=tokenizer, conti_tokens=conti_tokens)
     model = load_model(cfg, tokenizer).to(local_rank)
     net = DDP(model, device_ids=[local_rank])
@@ -239,8 +234,12 @@ def main_worker(local_rank, cfg):
 
     # ------------------------------------------Load Checkpoint & optimizer
 
-    model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
+    # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
+    train_dataloader = load_data(cfg, mode='train', model=net, local_rank=local_rank, tokenizer=tokenizer,
+                                 conti_tokens=conti_tokens)  # 加载训练数据
+    # val_dataloader = load_data(cfg, mode='val', model=net, local_rank=local_rank, tokenizer=tokenizer,
+    #                              conti_tokens=conti_tokens)
     metrics = ['auc', 'mrr', 'ndcg5', 'ndcg10']
     best_val_result = {}
     best_val_epoch = {}
@@ -274,7 +273,7 @@ def main_worker(local_rank, cfg):
         # #################################  val  ###################################
         st_val = time.time()
         val_scores, acc_val, acc_pos_val, pos_ratio_val, val_impids, val_labels = \
-            val(net, local_rank, world_size, cfg)
+            eval(net, local_rank, val_dataloader, world_size, cfg)
         impressions = {}  # {1: {'score': [], 'lab': []}}
         for i in range(world_size):
             scores, imp_id, labs = val_scores[i], val_impids[i], val_labels[i]

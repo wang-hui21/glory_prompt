@@ -6,10 +6,13 @@ from torch_geometric.utils import subgraph
 import numpy as np
 import re
 
+
 class MyDataset(Dataset):
     def __init__(self, filename, news_index, news_input, local_rank, cfg, neighbor_dict, news_graph, entity_neighbors,
-                 tokenizer, conti_tokens):
-
+                 tokenizer, conti_tokens, status, news_entity=None):
+        self.filename = filename
+        self.news_index = news_index
+        self.news_input = news_input
         self.neighbor_dict = neighbor_dict
         self.news_graph = news_graph.to(local_rank, non_blocking=True)
 
@@ -17,22 +20,32 @@ class MyDataset(Dataset):
         self.entity_neighbors = entity_neighbors
         self.tokenizer = tokenizer
         self.conti_tokens = conti_tokens
-
+        self.cfg = cfg
         self.data = []
 
+        self.news_graph.x = torch.from_numpy(self.news_input).to(local_rank, non_blocking=True)
+        self.news_entity = news_entity
+        self.status = status
         self.load()
 
-    def __len__(self):
-        return len(self.data)
+    # def __len__(self):
+    #     return len(self.data)
 
-    def __getitem__(self, item):
-        return self.data[item]
+    # def __getitem__(self, item):
+    #     return self.data[item]
+
+    def trans_to_nindex(self, nids):
+        return [self.news_index[i] if i in self.news_index else 0 for i in nids]  # 返回点击新闻列表对应的索引
 
     def prepro_train(self, filename):
 
         with open(filename) as f:
-            for line in f:
-                sum_num_news = 0
+            sum_num_news = 0
+            for i, line in enumerate(f):
+                if i >= 10000:
+                    break
+                sum_num_news = sum_num_news + 1
+                print(sum_num_news)
                 line = line.strip().split('\t')
                 click_id = line[3].split()[-self.cfg.model.his_size:]  # 取出指定数量的新闻 最新阅读的新闻
                 sess_pos = line[4].split()  # 正样本只有一个
@@ -46,7 +59,8 @@ class MyDataset(Dataset):
                 for _ in range(self.cfg.model.k_hops):  # 指定寻找几跳的邻居，此处循环就执行几次
                     current_hop_idx = []
                     for news_idx in source_idx:
-                        current_hop_idx.extend(self.neighbor_dict[news_idx][:self.cfg.model.num_neighbors])  # 取出指定数量的新闻的邻居
+                        current_hop_idx.extend(
+                            self.neighbor_dict[news_idx][:self.cfg.model.num_neighbors])  # 取出指定数量的新闻的邻居
                     source_idx = current_hop_idx  # 更新索引信息，跳数加一
                     click_idx.extend(current_hop_idx)  # 将挑选出来的新闻合并起来
 
@@ -89,7 +103,7 @@ class MyDataset(Dataset):
                 template = template1 + "[SEP]" + template2 + "[SEP]" + template3
                 # 此处不用做过多的处理，只需要将新闻的数量用数字代替，在模板中占据所需要的位置，其中新闻的数量默认是50，候选新闻的数量为5
                 his_news_num = []
-                data = []
+
                 for i, news in enumerate(click_id):
                     his_news_num.append(str(i))  # 用数字表示表示浏览历史，占位，以便后面将embedding进行替换
                     # hcate=cate+" "+subcate
@@ -110,20 +124,23 @@ class MyDataset(Dataset):
                     sentence = base_sentence.replace("<candidate_news>", str(i))
                     # sentence = sentence.replace("<ccate>", cate+" "+subcate)
                     # sentence = base_sentence.replace("<ccate>", cate+" "+subcate)
-                    data.append({'sentence': sentence, 'target': 1, 'imp': imp ,'subgraph': sub_news_graph ,'mapping_idx': mapping_idx,
-                                'candidate_news': candidate_input, 'candidate_entity': candidate_entity, 'entity_mask': entity_mask,'num_nodes': sub_news_graph.num_nodes})
+                    self.data.append({'sentence': sentence, 'target': 1, 'imp': imp, 'subgraph': sub_news_graph,
+                                      'mapping_idx': mapping_idx,
+                                      'candidate_news': candidate_input[0], 'candidate_entity': candidate_entity[0],
+                                      'entity_mask': entity_mask[0], 'num_nodes': sub_news_graph.num_nodes})
 
                     for j, n in enumerate(sess_neg):
                         sentence = base_sentence.replace("<candidate_news>", str(j))
                         # sentence = sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
                         # sentence = base_sentence.replace("<ccate>", neg_cate + " " + neg_subcate)
-                        data.append({'sentence': sentence, 'target': 0, 'imp': imp,'subgraph': sub_news_graph ,'mapping_idx': mapping_idx,
-                                'candidate_news': candidate_input, 'candidate_entity': candidate_entity, 'entity_mask': entity_mask, 'num_nodes': sub_news_graph.num_nodes})
-
+                        self.data.append({'sentence': sentence, 'target': 0, 'imp': imp, 'subgraph': sub_news_graph,
+                                          'mapping_idx': mapping_idx,
+                                          'candidate_news': candidate_input[j + 1],
+                                          'candidate_entity': candidate_entity[j + 1],
+                                          'entity_mask': entity_mask[j + 1], 'num_nodes': sub_news_graph.num_nodes})
 
     # return sub_news_graph, padded_maping_idx, candidate_input, candidate_entity, entity_mask, label, \
     #         , sentence
-
 
     # 这个函数的主要作用是为了构建一个与原始图相关的子图，该子图包含唯一的节点和相应的边信息，以便后续进行进一步的计算和处理。
     def build_subgraph(self, subset, k):
@@ -144,51 +161,93 @@ class MyDataset(Dataset):
         sub_news_graph = Data(x=subemb, edge_index=sub_edge_index, edge_attr=sub_edge_attr)
 
         return sub_news_graph, unique_mapping[:k]
-    def load(self):
-        self.prepro_train(self.filename)
-    def collate_fn(self, batch):
 
-        sentence = [x['sentence'] for x in batch]
-        target = [x['target'] for x in batch]
-        imp = [x['imp'] for x in batch]
-        subgraph=[x['subgraph'] for x in batch]
-        mapping_idx = [x['mapping_idx'] for x in batch]
-        candidate_news = [torch.from_numpy(x['candidate_news']) for x in batch]
-        candidate_entity = [torch.from_numpy(x['candidate_entity']) for x in batch]
-        entity_mask = [torch.from_numpy(x['entity_mask']) for x in batch]
-        num_nodes = [x['num_nodes'] for x in batch]
+    def prepro_val(self, filename):
+        for line in open(self.filename):
+            if line.strip().split('\t')[3]:
+                line = line.strip().split('\t')
+                imp = line[0].split()
+                click_id = line[3].split()[-self.cfg.model.his_size:]
 
-        num_news = 0
-        for i, mapping in enumerate(mapping_idx):
-            mapping_idx[i] = mapping+num_news
-            num_news = num_news + num_nodes[i]
-            mapping_idx[i] = F.pad(mapping_idx[i], (self.cfg.model.his_size - len(mapping_idx[i]), 0), "constant",
-                                      -1)  # 填充mapping_idx长度
+                click_idx = self.trans_to_nindex(click_id)
+                clicked_entity = self.news_entity[click_idx]
+                source_idx = click_idx
+                for _ in range(self.cfg.model.k_hops):
+                    current_hop_idx = []
+                    for news_idx in source_idx:
+                        current_hop_idx.extend(self.neighbor_dict[news_idx][:self.cfg.model.num_neighbors])
+                    source_idx = current_hop_idx
+                    click_idx.extend(current_hop_idx)
+                sub_news_graph, mapping_idx = self.build_subgraph(click_idx, len(click_id))
 
-        # 这段代码的作用是将多个数据组合成一个批次，然后以生成器的方式逐个返回批次数据，同时清空用于下一批次的数据。
+                # ------------------ Entity --------------------
+                labels = np.array([int(i.split('-')[1]) for i in line[4].split()])
+                candidate_index = self.trans_to_nindex([i.split('-')[0] for i in line[4].split()])
+                candidate_input = self.news_input[candidate_index]
 
-        batch = Batch.from_data_list(subgraph)
+                if self.cfg.model.use_entity:
+                    origin_entity = self.news_entity[candidate_index]
+                    candidate_neighbor_entity = np.zeros(
+                        (len(candidate_index) * self.cfg.model.entity_size, self.cfg.model.entity_neighbors),
+                        dtype=np.int64)
+                    for cnt, idx in enumerate(origin_entity.flatten()):
+                        if idx == 0: continue
+                        entity_dict_length = len(self.entity_neighbors[idx])
+                        if entity_dict_length == 0: continue
+                        valid_len = min(entity_dict_length, self.cfg.model.entity_neighbors)
+                        candidate_neighbor_entity[cnt, :valid_len] = self.entity_neighbors[idx][:valid_len]
 
-        candidates = torch.stack(candidate_news)
-        mappings = torch.stack(mapping_idx)
-        candidate_entity_list = torch.stack(candidate_entity)
-        entity_mask_list = torch.stack(entity_mask)
+                    candidate_neighbor_entity = candidate_neighbor_entity.reshape(len(candidate_index),
+                                                                                  self.cfg.model.entity_size * self.cfg.model.entity_neighbors)
 
-        encode_dict = self.tokenizer.batch_encode_plus(
-            sentence,
-            add_special_tokens=True,
-            padding='max_length',
-            max_length=500,
-            truncation=True,
-            pad_to_max_length=True,
-            return_attention_mask=True,
-            return_tensors='pt'
-        )
-        batch_enc = encode_dict['input_ids']
-        batch_attn = encode_dict['attention_mask']
-        batch_token = encode_dict['token_type_ids']
-        target = torch.LongTensor(target)
-        return batch, candidates, mappings, candidate_entity_list, entity_mask_list, batch_enc, batch_token, batch_attn, target, imp
+                    entity_mask = candidate_neighbor_entity.copy()
+                    entity_mask[entity_mask > 0] = 1
+
+                    candidate_entity = np.concatenate((origin_entity, candidate_neighbor_entity), axis=-1)
+                else:
+                    candidate_entity = np.zeros(1)
+                    entity_mask = np.zeros(1)
+
+                template1 = ''.join(self.conti_tokens[0]) + "<user_sentence>"
+                template2 = ''.join(self.conti_tokens[1]) + "<candidate_news>"
+                # template1 = ''.join(self.conti_tokens[0]) + " 的类别是 "+"<ucate>"
+                # template2 = ''.join(self.conti_tokens[1])  +" 的类别是 " +"<ccate>"
+                template3 = "Does the user click the news? [MASK]"
+                template = template1 + "[SEP]" + template2 + "[SEP]" + template3
+                # 此处不用做过多的处理，只需要将新闻的数量用数字代替，在模板中占据所需要的位置，其中新闻的数量默认是50，候选新闻的数量为5
+                his_news_num = []
+                for i, news in enumerate(click_id):
+                    his_news_num.append(str(i))  # 用数字表示表示浏览历史，占位，以便后面将embedding进行替换
+                    # hcate=cate+" "+subcate
+                    # his_cate.append(hcate)
+                his_sen = '[NSEP] ' + ' [NSEP] '.join(his_news_num)
+                # his_cat = '[NSEP] ' + ' [NSEP] '.join(his_cate)
+                his_sen_ids = self.tokenizer.encode(his_sen,
+                                                    add_special_tokens=False)  # add_special_tokens=False表示在tokenize时不添加特殊token,如[CLS]等。
+                # his_cat_ids = self.tokenizer.encode(his_cat, add_special_tokens=False)[:max_his_len]
+                his_sen = self.tokenizer.decode(his_sen_ids)
+                # his_cat = self.tokenizer.decode(his_cat_ids)
+                base_sentence = template.replace("<user_sentence>", his_sen)
+
+                #             base_sentence = base_sentence.replace("<ucate>", his_cat)
+                # base_sentence = template.replace("<ucate>", his_cat)
+                for i, news in enumerate(candidate_index):
+                    sentence = base_sentence.replace("<candidate_news>", str(i))
+                    # sentence = sentence.replace("<ccate>", cate+" "+subcate)
+                    # sentence = base_sentence.replace("<ccate>", cate+" "+subcate)
+                    self.data.append({'sentence': sentence, 'target': labels[i], 'imp': imp, 'subgraph': sub_news_graph,
+                                      'mapping_idx': mapping_idx,
+                                      'candidate_news': candidate_input[i], 'candidate_entity': candidate_entity[i],
+                                      'entity_mask': entity_mask[i], 'num_nodes': sub_news_graph.num_nodes,
+                                      'clicked_entity': clicked_entity})
+
+    def __iter__(self):
+        if self.status == 'train':
+            self.prepro_train(self.filename)
+        else:
+            self.prepro_val(self.filename)
+        return self.data
+
 
 class NewsDataset(Dataset):
     def __init__(self, data):
